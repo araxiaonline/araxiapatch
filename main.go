@@ -7,6 +7,8 @@ import (
 	"os"
 	"os/signal"
 	"time"
+	"archive/tar"
+	"compress/gzip"
 
 	"github.com/therecipe/qt/core"
 	"github.com/therecipe/qt/widgets"
@@ -17,7 +19,7 @@ type ProgressBarWindow struct {
 	window       *widgets.QWidget
 	layout       *widgets.QVBoxLayout
 	bars         []*ProgressBar
-	maxNameWidth int // Maximum width for file names
+	maxNameWidth int
 	done         chan bool
 }
 
@@ -33,38 +35,27 @@ type ProgressBar struct {
 // Files to download
 var files = []string{
 	"info.txt",
-	"patch-4.mpq",
-	"patch-5.mpq",
-	"patch-7.mpq",
-	"patch-9.mpq",
-	"patch-B.mpq",
-	"patch-C.mpq",
-	"patch-D.mpq",
-	"patch-F.mpq",
-	"patch-G.mpq",
-	"patch-J.mpq",
-	"patch-L.mpq",
-	"patch-S.mpq",
-	"patch-T.mpq",
-	"patch-U.mpq",
+	"AraxiaPatchv1.tar.gz",
+	"HDPatchv1.tar.gz",
 }
 
-var patchSource = "https://storage.googleapis.com/araxia-client-patches/"
+var patchSource = "https://storage.googleapis.com/araxia-client-patches/Updatev1/"
+var appName = "Araxia Client Patch Downloader"
 
 func main() {
 	catchInterrupt()
 
 	app := widgets.NewQApplication(len(os.Args), os.Args)
+	// Window setup
 	window := widgets.NewQWidget(nil, 0)
-	window.SetWindowTitle("Araxia Client Patch Downloader")
-	// Add header Title
-	title := widgets.NewQLabel2("Araxia Client Patch Downloader", nil, 0)
+	window.SetWindowTitle(appName)
+	title := widgets.NewQLabel2(appName, nil, 0)
 	title.Font().SetPointSize(20)
 	title.Font().SetFamily("Arial")
 	title.SetAlignment(core.Qt__AlignCenter)
-
 	window.SetMinimumSize2(800, 600)
 
+	// Build layout
 	layout := widgets.NewQVBoxLayout()
 	window.SetLayout(layout)
 	layout.AddWidget(title, 0, core.Qt__AlignCenter)
@@ -142,6 +133,67 @@ func (p *ProgressBarWindow) run() {
 		<-done
 	}
 
+	// Untar gz the patch files
+	for _, file := range files {
+		fmt.Println("Untarring", file)
+		err := untarGz(directory+"/"+file, directory)
+		if err != nil {
+			fmt.Println("Error untarring file:", file, err)
+		}
+	}
+
+}
+
+func untarGz(src string, dest string) error {
+	// Open gzip file
+	gzipFile, err := os.Open(src)
+	if err != nil {
+		return err
+	}
+
+	// Check if file has tar.gz extension if not skip the file
+	if gzipFile.Name()[len(gzipFile.Name())-6:] != ".tar.gz" {
+		return nil
+	}
+
+	gzipReader, err := gzip.NewReader(gzipFile)
+	if err != nil {
+		return err
+	}
+
+	tarReader := tar.NewReader(gzipReader)
+
+	// Iterate through the files in the archive
+	for {
+		header, err := tarReader.Next()
+		if err == io.EOF {
+			break
+		}
+
+		if err != nil {
+			return err
+		}
+
+		switch header.Typeflag {
+		case tar.TypeDir:
+			if err := os.MkdirAll(dest+"/"+header.Name, 0755); err != nil {
+				return err
+			}
+		case tar.TypeReg:
+			outFile, err := os.Create(dest + "/" + header.Name)
+			if err != nil {
+				return err
+			}
+			if _, err := io.Copy(outFile, tarReader); err != nil {
+				return err
+			}
+			outFile.Close()
+		default:
+			fmt.Printf("Unable to untar type : %c in file %s", header.Typeflag, header.Name)
+		}
+	}
+
+	return nil
 }
 
 func (p *ProgressBarWindow) downloadFile(directory string, file string, order int, done chan bool) {
